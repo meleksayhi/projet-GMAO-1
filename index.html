@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GMAO Pro - Version 5</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        :root { 
+            --primary: #2563eb; --bg: #f8fafc; --text: #1e293b;
+            --success: #22c55e; --warning: #eab308; --danger: #ef4444;
+        }
+        * { box-sizing: border-box; }
+        body { font-family: 'Segoe UI', sans-serif; background: var(--bg); margin: 0; padding: 15px; color: var(--text); }
+        .container { max-width: 1000px; margin: auto; }
+        
+        .dashboard { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-bottom: 20px; }
+        .card { background: white; padding: 15px; border-radius: 12px; text-align: center; box-shadow: 0 2px 4px rgba(0,0,0,0.05); border-bottom: 4px solid #cbd5e1; }
+        .card div { font-size: 1.5em; font-weight: bold; }
+
+        .chart-box { background: white; border-radius: 12px; padding: 15px; margin-bottom: 20px; height: 250px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+
+        .box { background: white; padding: 20px; border-radius: 12px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+        .grid-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin-top: 15px; }
+        
+        input, button { padding: 12px; border: 1px solid #e2e8f0; border-radius: 8px; width: 100%; font-size: 15px; }
+        .search-bar { border: 2px solid var(--primary); background: #eff6ff; margin-bottom: 10px; }
+        
+        button { cursor: pointer; font-weight: bold; border: none; }
+        .btn-add { background: var(--primary); color: white; }
+        .btn-save { background: #64748b; color: white; font-size: 12px; margin-top: 10px; }
+
+        .table-container { background: white; border-radius: 12px; overflow-x: auto; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+        table { width: 100%; border-collapse: collapse; min-width: 600px; }
+        th { background: #f1f5f9; padding: 15px; text-align: left; }
+        td { padding: 15px; border-top: 1px solid #f1f5f9; }
+
+        .badge { padding: 4px 8px; border-radius: 6px; font-size: 11px; font-weight: bold; }
+        .bg-success { background: #dcfce7; color: #166534; }
+        .bg-warning { background: #fef9c3; color: #854d0e; }
+        .bg-danger { background: #fee2e2; color: #991b1b; }
+        
+        .actions { display: flex; gap: 10px; }
+        .action-btn { background: none; border: none; font-size: 18px; width: auto; cursor: pointer; }
+
+        .admin-tools { display: flex; gap: 10px; margin-bottom: 20px; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>🛠️ GMAO Métrologie v5</h2>
+
+    <div class="admin-tools">
+        <button class="btn-save" onclick="exporterDonnees()">💾 Exporter Sauvegarde</button>
+        <button class="btn-save" onclick="document.getElementById('importInput').click()">📂 Importer Sauvegarde</button>
+        <input type="file" id="importInput" style="display:none" onchange="importerDonnees(event)">
+    </div>
+
+    <div class="dashboard">
+        <div class="card" style="border-color: var(--success)"><b>CONFORMES</b><div id="ok">0</div></div>
+        <div class="card" style="border-color: var(--warning)"><b>À SUIVRE</b><div id="warn">0</div></div>
+        <div class="card" style="border-color: var(--danger)"><b>RETARD</b><div id="bad">0</div></div>
+    </div>
+
+    <div class="chart-box">
+        <canvas id="myChart"></canvas>
+    </div>
+
+    <div class="box">
+        <input type="text" id="search" class="search-bar" placeholder="🔍 Rechercher un instrument..." onkeyup="refresh()">
+        <div class="grid-form">
+            <input type="text" id="nom" placeholder="Nom de l'instrument">
+            <input type="text" id="lieu" placeholder="Lieu">
+            <input type="date" id="date">
+            <input type="number" id="freq" placeholder="Fréquence (mois)">
+            <button class="btn-add" id="main-btn" onclick="ajouter()">Ajouter</button>
+        </div>
+    </div>
+
+    <div class="table-container">
+        <table>
+            <thead>
+                <tr>
+                    <th>Instrument</th>
+                    <th>Lieu</th>
+                    <th>Échéance</th>
+                    <th>État</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody id="tbody"></tbody>
+        </table>
+    </div>
+</div>
+
+<script>
+    let data = JSON.parse(localStorage.getItem('gmao_v5')) || [];
+    let editIndex = -1;
+    let myChart;
+
+    function calcul(d, f) {
+        let dateP = new Date(d);
+        dateP.setMonth(dateP.getMonth() + parseInt(f));
+        let diff = (dateP - new Date()) / 86400000;
+        let status = { t: "CONFORME", c: "bg-success", d: dateP.toLocaleDateString('fr-FR') };
+        if (diff < 0) { status.t = "HORS DÉLAI"; status.c = "bg-danger"; }
+        else if (diff < 30) { status.t = "À SURVEILLER"; status.c = "bg-warning"; }
+        return status;
+    }
+
+    function refresh() {
+        const body = document.getElementById('tbody');
+        const searchTerm = document.getElementById('search').value.toLowerCase();
+        body.innerHTML = "";
+        let s = { ok: 0, w: 0, b: 0 };
+
+        data.forEach((item, index) => {
+            if (item.nom.toLowerCase().includes(searchTerm) || item.lieu.toLowerCase().includes(searchTerm)) {
+                let res = calcul(item.date, item.freq);
+                if(res.t === "CONFORME") s.ok++; 
+                else if(res.t === "À SURVEILLER") s.w++; 
+                else s.b++;
+
+                body.innerHTML += `<tr>
+                    <td><b>${item.nom}</b></td>
+                    <td>📍 ${item.lieu}</td>
+                    <td>${res.d}</td>
+                    <td><span class="badge ${res.c}">${res.t}</span></td>
+                    <td class="actions">
+                        <button class="action-btn" onclick="preparerEdit(${index})">📝</button>
+                        <button class="action-btn" onclick="supprimer(${index})">🗑️</button>
+                    </td>
+                </tr>`;
+            }
+        });
+        document.getElementById('ok').innerText = s.ok;
+        document.getElementById('warn').innerText = s.w;
+        document.getElementById('bad').innerText = s.b;
+        updateChart(s);
+        localStorage.setItem('gmao_v5', JSON.stringify(data));
+    }
+
+    function updateChart(s) {
+        const ctx = document.getElementById('myChart').getContext('2d');
+        if (myChart) myChart.destroy();
+        myChart = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: ['Conformes', 'À suivre', 'Retard'],
+                datasets: [{ data: [s.ok, s.w, s.b], backgroundColor: ['#22c55e', '#eab308', '#ef4444'] }]
+            },
+            options: { maintainAspectRatio: false, plugins: { legend: { display: false } } }
+        });
+    }
+
+    function ajouter() {
+        const n = document.getElementById('nom').value, l = document.getElementById('lieu').value || "Atelier", d = document.getElementById('date').value, f = document.getElementById('freq').value;
+        if(!n || !d || !f) return alert("Champs obligatoires !");
+        if (editIndex === -1) { data.push({nom: n, lieu: l, date: d, freq: f}); } 
+        else { data[editIndex] = {nom: n, lieu: l, date: d, freq: f}; editIndex = -1; document.getElementById('main-btn').innerText = "Ajouter"; }
+        document.querySelectorAll('.grid-form input').forEach(i => i.value = "");
+        refresh();
+    }
+
+    function preparerEdit(index) {
+        const item = data[index];
+        document.getElementById('nom').value = item.nom; document.getElementById('lieu').value = item.lieu;
+        document.getElementById('date').value = item.date; document.getElementById('freq').value = item.freq;
+        editIndex = index; document.getElementById('main-btn').innerText = "Mettre à jour";
+    }
+
+    function supprimer(index) { if(confirm("Supprimer ?")) { data.splice(index, 1); refresh(); } }
+
+    // --- NOUVELLES FONCTIONS DE SAUVEGARDE ---
+    function exporterDonnees() {
+        const blob = new Blob([JSON.stringify(data)], {type: 'application/json'});
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = 'sauvegarde_gmao.json'; a.click();
+    }
+
+    function importerDonnees(event) {
+        const reader = new FileReader();
+        reader.onload = function(e) {
+            data = JSON.parse(e.target.result);
+            refresh();
+            alert("Données importées avec succès !");
+        };
+        reader.readAsText(event.target.files[0]);
+    }
+
+    refresh();
+</script>
+</body>
+</html>
